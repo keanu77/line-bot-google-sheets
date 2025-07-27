@@ -58,6 +58,16 @@ has_base64 = google_credentials_base64
 has_file = google_credentials_file
 has_simple = google_project_id and google_private_key and google_client_email
 
+# Debug logging
+logger.info(f"Credential detection status:")
+logger.info(f"  - JSON: {'Yes' if has_json else 'No'}")
+logger.info(f"  - BASE64: {'Yes' if has_base64 else 'No'}")
+logger.info(f"  - File: {'Yes' if has_file else 'No'}")
+logger.info(f"  - Individual vars: {'Yes' if has_simple else 'No'}")
+logger.info(f"  - GOOGLE_PROJECT_ID: {'Set' if google_project_id else 'Not set'}")
+logger.info(f"  - GOOGLE_PRIVATE_KEY: {'Set' if google_private_key else 'Not set'}")
+logger.info(f"  - GOOGLE_CLIENT_EMAIL: {'Set' if google_client_email else 'Not set'}")
+
 if not (has_json or has_base64 or has_file or has_simple):
     logger.error("Must provide credentials via one of: GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEETS_CREDENTIALS_BASE64, GOOGLE_SHEETS_CREDENTIALS_FILE, or GOOGLE_PROJECT_ID+GOOGLE_PRIVATE_KEY+GOOGLE_CLIENT_EMAIL")
     raise ValueError("Missing required Google Sheets credentials")
