@@ -65,13 +65,23 @@ def init_google_sheets():
         elif google_credentials_base64:
             # Use BASE64 encoded credentials (recommended for deployment)
             try:
+                # Decode BASE64 and clean the string
                 decoded_credentials = base64.b64decode(google_credentials_base64).decode('utf-8')
-                credentials_dict = json.loads(decoded_credentials)
+                # Remove any control characters and whitespace
+                cleaned_credentials = ''.join(char for char in decoded_credentials if ord(char) >= 32 or char in '\t\n\r')
+                # Strip leading/trailing whitespace
+                cleaned_credentials = cleaned_credentials.strip()
+                
+                credentials_dict = json.loads(cleaned_credentials)
                 credentials = Credentials.from_service_account_info(
                     credentials_dict,
                     scopes=['https://www.googleapis.com/auth/spreadsheets']
                 )
                 logger.info("Using Google credentials from BASE64 environment variable")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON from BASE64 credentials: {e}")
+                logger.error(f"Decoded content preview: {decoded_credentials[:200]}...")
+                raise
             except Exception as e:
                 logger.error(f"Failed to decode BASE64 credentials: {e}")
                 raise
