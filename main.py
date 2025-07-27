@@ -3,14 +3,18 @@ import json
 import logging
 import time
 import base64
+import io
 from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from linebot.models import MessageEvent, TextMessage, TextSendMessage, ImageMessage
 import gspread
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 from dotenv import load_dotenv
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -81,7 +85,10 @@ def init_google_sheets():
                 raise FileNotFoundError(f"Credentials file not found: {google_credentials_file}")
             credentials = Credentials.from_service_account_file(
                 google_credentials_file,
-                scopes=['https://www.googleapis.com/auth/spreadsheets']
+                scopes=[
+                    'https://www.googleapis.com/auth/spreadsheets',
+                    'https://www.googleapis.com/auth/drive.file'
+                ]
             )
             logger.info("Using Google credentials from file")
         elif has_simple:
@@ -118,7 +125,10 @@ def init_google_sheets():
                 
                 credentials = Credentials.from_service_account_info(
                     credentials_dict,
-                    scopes=['https://www.googleapis.com/auth/spreadsheets']
+                    scopes=[
+                        'https://www.googleapis.com/auth/spreadsheets',
+                        'https://www.googleapis.com/auth/drive.file'
+                    ]
                 )
                 logger.info("Using Google credentials from individual environment variables")
             except Exception as e:
@@ -144,7 +154,10 @@ def init_google_sheets():
                 credentials_dict = json.loads(cleaned_credentials)
                 credentials = Credentials.from_service_account_info(
                     credentials_dict,
-                    scopes=['https://www.googleapis.com/auth/spreadsheets']
+                    scopes=[
+                        'https://www.googleapis.com/auth/spreadsheets',
+                        'https://www.googleapis.com/auth/drive.file'
+                    ]
                 )
                 logger.info("Using Google credentials from BASE64 environment variable")
             except base64.binascii.Error as e:
@@ -168,14 +181,72 @@ def init_google_sheets():
             logger.info("Using Google credentials from JSON environment variable")
         
         client = gspread.authorize(credentials)
-        return client
+        return client, credentials
     except Exception as e:
         logger.error(f"Failed to initialize Google Sheets client: {e}")
         raise
 
-google_client = init_google_sheets()
+google_client, google_credentials = init_google_sheets()
 
-def write_to_google_sheet(timestamp, user_id, user_name, message_text, max_retries=3):
+# Initialize Google Drive service
+def init_google_drive():
+    try:
+        drive_service = build('drive', 'v3', credentials=google_credentials)
+        logger.info("Google Drive service initialized successfully")
+        return drive_service
+    except Exception as e:
+        logger.error(f"Failed to initialize Google Drive service: {e}")
+        raise
+
+drive_service = init_google_drive()
+
+def upload_image_to_drive(image_content, filename, user_id):
+    """Upload image to Google Drive and return shareable link"""
+    try:
+        # Create file metadata
+        file_metadata = {
+            'name': f"{user_id}_{filename}",
+            'parents': []  # Upload to root folder, you can specify a folder ID here
+        }
+        
+        # Create media upload object
+        media = MediaIoBaseUpload(
+            io.BytesIO(image_content),
+            mimetype='image/jpeg',
+            resumable=True
+        )
+        
+        # Upload file
+        file = drive_service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id'
+        ).execute()
+        
+        file_id = file.get('id')
+        logger.info(f"Successfully uploaded image to Google Drive: {file_id}")
+        
+        # Make file publicly readable (optional - you can adjust permissions as needed)
+        permission = {
+            'type': 'anyone',
+            'role': 'reader'
+        }
+        drive_service.permissions().create(
+            fileId=file_id,
+            body=permission
+        ).execute()
+        
+        # Generate shareable link
+        drive_link = f"https://drive.google.com/file/d/{file_id}/view"
+        logger.info(f"Generated Drive link: {drive_link}")
+        
+        return drive_link
+        
+    except Exception as e:
+        logger.error(f"Failed to upload image to Google Drive: {e}")
+        return None
+
+def write_to_google_sheet(timestamp, user_id, user_name, message_text, image_link=None, max_retries=3):
     """Write message data to Google Sheet with retry mechanism"""
     for attempt in range(max_retries):
         try:
@@ -192,8 +263,11 @@ def write_to_google_sheet(timestamp, user_id, user_name, message_text, max_retri
             sheet = worksheets[0]
             logger.info(f"Using first worksheet: {sheet.title}")
             
-            # Prepare row data
-            row_data = [timestamp, user_id, user_name, message_text]
+            # Prepare row data - include image link if available
+            if image_link:
+                row_data = [timestamp, user_id, user_name, message_text, image_link]
+            else:
+                row_data = [timestamp, user_id, user_name, message_text, ""]
             logger.info(f"Prepared row data: {row_data}")
             
             # Append row to sheet
@@ -277,6 +351,69 @@ def handle_message(event):
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(text="❌ 處理訊息時發生錯誤，請稍後再試。")
+            )
+        except Exception as reply_error:
+            logger.error(f"Error sending reply: {reply_error}")
+
+@handler.add(MessageEvent, message=ImageMessage)
+def handle_image(event):
+    """Handle image messages from Line Bot"""
+    try:
+        # Get message data
+        user_id = event.source.user_id
+        message_id = event.message.id
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Get user profile
+        try:
+            profile = line_bot_api.get_profile(user_id)
+            user_name = profile.display_name
+        except LineBotApiError as e:
+            logger.warning(f"Could not get user profile: {e}")
+            user_name = "Unknown"
+        
+        logger.info(f"Received image from {user_name} ({user_id}): {message_id}")
+        
+        # Download image content from Line
+        try:
+            message_content = line_bot_api.get_message_content(message_id)
+            image_content = message_content.content
+            logger.info(f"Downloaded image content, size: {len(image_content)} bytes")
+        except Exception as e:
+            logger.error(f"Failed to download image: {e}")
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="❌ 下載圖片時發生錯誤。")
+            )
+            return
+        
+        # Upload image to Google Drive
+        filename = f"{timestamp.replace(':', '-').replace(' ', '_')}.jpg"
+        drive_link = upload_image_to_drive(image_content, filename, user_id)
+        
+        # Write to Google Sheet
+        if drive_link:
+            success = write_to_google_sheet(timestamp, user_id, user_name, "📷 圖片訊息", drive_link)
+            if success:
+                reply_text = f"✅ 您的圖片已成功記錄並上傳到雲端！\n🔗 連結：{drive_link}"
+            else:
+                reply_text = "❌ 圖片上傳成功，但記錄到表格時發生錯誤。"
+        else:
+            reply_text = "❌ 抱歉，上傳圖片時發生錯誤，請稍後再試。"
+        
+        # Reply to user
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=reply_text)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error handling image: {e}")
+        # Send error message to user
+        try:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="❌ 處理圖片時發生錯誤，請稍後再試。")
             )
         except Exception as reply_error:
             logger.error(f"Error sending reply: {reply_error}")
