@@ -180,7 +180,21 @@ def write_to_google_sheet(timestamp, user_id, user_name, message_text, max_retri
     for attempt in range(max_retries):
         try:
             logger.info(f"Attempt {attempt + 1}: Opening Google Sheet with ID: {google_sheet_id}")
-            sheet = google_client.open_by_key(google_sheet_id).worksheet(google_sheet_name)
+            spreadsheet = google_client.open_by_key(google_sheet_id)
+            logger.info(f"Successfully opened spreadsheet: {spreadsheet.title}")
+            
+            # List all worksheets for debugging
+            worksheets = spreadsheet.worksheets()
+            worksheet_names = [ws.title for ws in worksheets]
+            logger.info(f"Available worksheets: {worksheet_names}")
+            
+            # Try to get the specified worksheet, or use the first one
+            try:
+                sheet = spreadsheet.worksheet(google_sheet_name)
+                logger.info(f"Using worksheet: {google_sheet_name}")
+            except:
+                logger.warning(f"Worksheet '{google_sheet_name}' not found, using first worksheet: {worksheet_names[0]}")
+                sheet = worksheets[0]
             
             # Prepare row data
             row_data = [timestamp, user_id, user_name, message_text]
