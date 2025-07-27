@@ -16,7 +16,6 @@ from googleapiclient.http import MediaIoBaseUpload
 from google.cloud import speech
 from dotenv import load_dotenv
 import requests
-import openai
 
 # Load environment variables
 load_dotenv()
@@ -280,34 +279,47 @@ def convert_audio_to_text_with_openai(audio_content, message_id):
             logger.error("OpenAI API key not provided")
             return None
             
-        # 設定 OpenAI client
-        client = openai.OpenAI(api_key=openai_api_key)
-        
-        # 將音頻內容寫入暫存檔案
         import tempfile
+        import os
+            
+        # 將音頻內容寫入暫存檔案
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
             temp_file.write(audio_content)
             temp_file_path = temp_file.name
         
         logger.info(f"Converting audio to text using OpenAI Whisper, file size: {len(audio_content)} bytes")
         
-        # 使用 Whisper API 轉換語音
+        # 使用 requests 直接調用 OpenAI API
+        import requests
+        
+        url = "https://api.openai.com/v1/audio/transcriptions"
+        headers = {
+            "Authorization": f"Bearer {openai_api_key}"
+        }
+        
         with open(temp_file_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                language="zh"  # 指定中文
-            )
+            files = {
+                "file": audio_file,
+                "model": (None, "whisper-1"),
+                "language": (None, "zh")
+            }
+            
+            response = requests.post(url, headers=headers, files=files)
         
         # 清理暫存檔案
-        import os
         os.unlink(temp_file_path)
         
-        if transcript.text:
-            logger.info(f"OpenAI Whisper transcription successful: {transcript.text[:100]}...")
-            return transcript.text.strip()
+        if response.status_code == 200:
+            result = response.json()
+            if "text" in result and result["text"]:
+                transcript = result["text"].strip()
+                logger.info(f"OpenAI Whisper transcription successful: {transcript[:100]}...")
+                return transcript
+            else:
+                logger.warning("OpenAI Whisper returned empty text")
+                return None
         else:
-            logger.warning("OpenAI Whisper returned empty text")
+            logger.error(f"OpenAI Whisper API error: {response.status_code} - {response.text}")
             return None
             
     except Exception as e:
