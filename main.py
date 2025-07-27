@@ -87,8 +87,20 @@ def init_google_sheets():
         elif has_simple:
             # Use individual environment variables (best for deployment with long credentials)
             try:
-                # Fix newlines in private key
-                private_key = google_private_key.replace('\\n', '\n')
+                # Clean and format private key
+                private_key = google_private_key.strip()
+                
+                # Add headers if missing
+                if not private_key.startswith('-----BEGIN PRIVATE KEY-----'):
+                    private_key = '-----BEGIN PRIVATE KEY-----\n' + private_key
+                if not private_key.endswith('-----END PRIVATE KEY-----'):
+                    private_key = private_key + '\n-----END PRIVATE KEY-----'
+                
+                # Fix newlines in private key - handle both literal \n and actual newlines
+                private_key = private_key.replace('\\n', '\n')
+                
+                logger.info(f"Private key format check - starts with BEGIN: {private_key.startswith('-----BEGIN')}")
+                logger.info(f"Private key format check - ends with END: {private_key.endswith('-----END PRIVATE KEY-----')}")
                 
                 # Construct credentials dictionary
                 credentials_dict = {
