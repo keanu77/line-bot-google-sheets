@@ -266,18 +266,7 @@ def handle_message(event):
         except Exception as reply_error:
             logger.error(f"Error sending reply: {reply_error}")
 
-@handler.default
-def default_handler(event):
-    """Handle non-text messages"""
-    try:
-        # Check if event has reply_token (some events don't)
-        if hasattr(event, 'reply_token'):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="📝 目前僅支援文字訊息記錄，請傳送文字訊息。")
-            )
-    except Exception as e:
-        logger.error(f"Error handling non-text message: {e}")
+# Remove the problematic default handler for now
 
 @app.route('/health')
 def health_check():
