@@ -179,10 +179,12 @@ def write_to_google_sheet(timestamp, user_id, user_name, message_text, max_retri
     """Write message data to Google Sheet with retry mechanism"""
     for attempt in range(max_retries):
         try:
+            logger.info(f"Attempt {attempt + 1}: Opening Google Sheet with ID: {google_sheet_id}")
             sheet = google_client.open_by_key(google_sheet_id).worksheet(google_sheet_name)
             
             # Prepare row data
             row_data = [timestamp, user_id, user_name, message_text]
+            logger.info(f"Prepared row data: {row_data}")
             
             # Append row to sheet
             sheet.append_row(row_data)
@@ -190,7 +192,10 @@ def write_to_google_sheet(timestamp, user_id, user_name, message_text, max_retri
             return True
             
         except Exception as e:
-            logger.warning(f"Attempt {attempt + 1} failed to write to Google Sheet: {e}")
+            logger.error(f"Attempt {attempt + 1} failed to write to Google Sheet: {str(e)}")
+            logger.error(f"Exception type: {type(e).__name__}")
+            if hasattr(e, 'response'):
+                logger.error(f"Response status: {getattr(e, 'response', {}).get('status', 'N/A')}")
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)  # Exponential backoff
             else:
