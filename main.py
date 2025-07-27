@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import time
+import base64
 from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -36,6 +37,7 @@ handler = WebhookHandler(channel_secret)
 
 # Google Sheets configuration
 google_credentials_json = os.environ.get('GOOGLE_SHEETS_CREDENTIALS')
+google_credentials_base64 = os.environ.get('GOOGLE_SHEETS_CREDENTIALS_BASE64')
 google_credentials_file = os.environ.get('GOOGLE_SHEETS_CREDENTIALS_FILE')
 google_sheet_id = os.environ.get('GOOGLE_SHEET_ID')
 google_sheet_name = os.environ.get('GOOGLE_SHEET_NAME', 'Sheet1')
@@ -44,8 +46,8 @@ if not google_sheet_id:
     logger.error("GOOGLE_SHEET_ID must be set")
     raise ValueError("Missing required Google Sheet ID")
 
-if not google_credentials_json and not google_credentials_file:
-    logger.error("Either GOOGLE_SHEETS_CREDENTIALS or GOOGLE_SHEETS_CREDENTIALS_FILE must be set")
+if not google_credentials_json and not google_credentials_base64 and not google_credentials_file:
+    logger.error("Either GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEETS_CREDENTIALS_BASE64, or GOOGLE_SHEETS_CREDENTIALS_FILE must be set")
     raise ValueError("Missing required Google Sheets credentials")
 
 # Initialize Google Sheets client
@@ -60,14 +62,27 @@ def init_google_sheets():
                 scopes=['https://www.googleapis.com/auth/spreadsheets']
             )
             logger.info("Using Google credentials from file")
+        elif google_credentials_base64:
+            # Use BASE64 encoded credentials (recommended for deployment)
+            try:
+                decoded_credentials = base64.b64decode(google_credentials_base64).decode('utf-8')
+                credentials_dict = json.loads(decoded_credentials)
+                credentials = Credentials.from_service_account_info(
+                    credentials_dict,
+                    scopes=['https://www.googleapis.com/auth/spreadsheets']
+                )
+                logger.info("Using Google credentials from BASE64 environment variable")
+            except Exception as e:
+                logger.error(f"Failed to decode BASE64 credentials: {e}")
+                raise
         else:
-            # Use credentials from environment variable (for deployment)
+            # Use credentials from JSON environment variable (fallback)
             credentials_dict = json.loads(google_credentials_json)
             credentials = Credentials.from_service_account_info(
                 credentials_dict,
                 scopes=['https://www.googleapis.com/auth/spreadsheets']
             )
-            logger.info("Using Google credentials from environment variable")
+            logger.info("Using Google credentials from JSON environment variable")
         
         client = gspread.authorize(credentials)
         return client
