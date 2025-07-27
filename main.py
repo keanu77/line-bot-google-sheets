@@ -575,62 +575,25 @@ def handle_audio(event):
             )
             return
         
-        # Check if speech conversion is disabled or try to convert
-        if disable_speech_conversion:
-            logger.info("Speech-to-text conversion is disabled, recording audio info only")
-            # Record audio message info without conversion
-            success = write_to_google_sheet(
-                timestamp, 
-                user_id, 
-                user_name, 
-                f"🎤 語音訊息已接收 (時長: {duration}ms, 大小: {len(audio_content)} bytes)"
-            )
-            reply_text = "✅ 語音訊息已成功記錄！\n📝 註：語音轉文字功能目前停用，僅記錄語音資訊"
+        # 簡化策略：直接記錄語音訊息資訊，不嘗試轉換
+        logger.info("Recording audio message info without transcription conversion")
+        
+        # 計算語音時長（秒）
+        duration_seconds = duration / 1000 if duration else 0
+        audio_size_kb = len(audio_content) / 1024 if audio_content else 0
+        
+        # 記錄語音訊息基本資訊
+        success = write_to_google_sheet(
+            timestamp, 
+            user_id, 
+            user_name, 
+            f"🎤 語音訊息 (時長: {duration_seconds:.1f}秒, 大小: {audio_size_kb:.1f}KB)"
+        )
+        
+        if success:
+            reply_text = f"✅ 語音訊息已成功記錄！\n📊 時長: {duration_seconds:.1f}秒\n📁 大小: {audio_size_kb:.1f}KB\n\n💡 目前僅記錄語音基本資訊"
         else:
-            # Try to convert audio to text using LINE API first
-            logger.info("Starting speech-to-text conversion with LINE API...")
-            transcribed_text = convert_audio_to_text_with_line(message_id)
-            
-            # If LINE API fails or returns processing, try Google as fallback
-            if not transcribed_text or transcribed_text == "processing":
-                if transcribed_text == "processing":
-                    logger.info("LINE transcription is processing, trying Google Speech as fallback...")
-                else:
-                    logger.info("LINE transcription failed, trying Google Speech as fallback...")
-                
-                transcribed_text = convert_audio_to_text_with_google(audio_content)
-            
-            if transcribed_text and transcribed_text != "processing":
-                # Write transcribed text to Google Sheet
-                success = write_to_google_sheet(
-                    timestamp, 
-                    user_id, 
-                    user_name, 
-                    f"🎤 語音轉文字: {transcribed_text}"
-                )
-                
-                if success:
-                    reply_text = f"✅ 語音訊息已成功轉換並記錄！\n\n📝 轉換結果：\n「{transcribed_text}」"
-                else:
-                    reply_text = f"✅ 語音轉換成功，但記錄時發生錯誤。\n\n📝 轉換結果：\n「{transcribed_text}」"
-            elif transcribed_text == "processing":
-                # LINE is still processing, record and ask user to wait
-                success = write_to_google_sheet(
-                    timestamp, 
-                    user_id, 
-                    user_name, 
-                    f"🎤 語音訊息 (轉換處理中，時長: {duration}ms)"
-                )
-                reply_text = "⏳ 語音正在轉換中，請稍後再傳送一次語音以獲取轉換結果。"
-            else:
-                # All transcription methods failed, record that we received an audio message
-                success = write_to_google_sheet(
-                    timestamp, 
-                    user_id, 
-                    user_name, 
-                    f"🎤 語音訊息 (轉換失敗，時長: {duration}ms, 大小: {len(audio_content)} bytes)"
-                )
-                reply_text = "❌ 抱歉，無法識別語音內容。請確保語音清晰並重新嘗試。"
+            reply_text = "❌ 抱歉，記錄語音訊息時發生錯誤，請稍後再試。"
         
         # Reply to user
         line_bot_api.reply_message(
