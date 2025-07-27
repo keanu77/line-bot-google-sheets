@@ -52,6 +52,9 @@ google_client_email = os.environ.get('GOOGLE_CLIENT_EMAIL')
 google_sheet_id = os.environ.get('GOOGLE_SHEET_ID')
 google_sheet_name = os.environ.get('GOOGLE_SHEET_NAME', 'Sheet1')
 
+# Option to disable Google Drive upload (useful when quota is exceeded)
+disable_drive_upload = os.environ.get('DISABLE_DRIVE_UPLOAD', 'false').lower() == 'true'
+
 if not google_sheet_id:
     logger.error("GOOGLE_SHEET_ID must be set")
     raise ValueError("Missing required Google Sheet ID")
@@ -405,19 +408,30 @@ def handle_image(event):
             )
             return
         
-        # Upload image to Google Drive
-        filename = f"{timestamp.replace(':', '-').replace(' ', '_')}.jpg"
-        drive_link = upload_image_to_drive(image_content, filename, user_id)
+        # Check if Drive upload is disabled or try to upload
+        if disable_drive_upload:
+            logger.info("Google Drive upload is disabled, recording image info only")
+            drive_link = f"圖片已接收 (ID: {message_id}, 大小: {len(image_content)} bytes)"
+        else:
+            # Try to upload to Google Drive first, fallback to info if failed
+            filename = f"{timestamp.replace(':', '-').replace(' ', '_')}.jpg"
+            drive_link = upload_image_to_drive(image_content, filename, user_id)
+            
+            # If Drive upload fails, record image info instead
+            if not drive_link:
+                logger.info("Drive upload failed, recording image info only")
+                drive_link = f"圖片上傳失敗 (ID: {message_id}, 大小: {len(image_content)} bytes)"
         
         # Write to Google Sheet
-        if drive_link:
-            success = write_to_google_sheet(timestamp, user_id, user_name, "📷 圖片訊息", drive_link)
-            if success:
-                reply_text = f"✅ 您的圖片已成功記錄並上傳到雲端！\n🔗 連結：{drive_link}"
+        success = write_to_google_sheet(timestamp, user_id, user_name, "📷 圖片訊息", drive_link)
+        
+        if success:
+            if "drive.google.com" in drive_link:
+                reply_text = f"✅ 您的圖片已成功記錄並上傳到 Google Drive！\n🔗 連結：{drive_link}"
             else:
-                reply_text = "❌ 圖片上傳成功，但記錄到表格時發生錯誤。"
+                reply_text = "✅ 您的圖片已成功記錄！\n📝 註：由於雲端空間限制，圖片已記錄但未上傳到 Drive"
         else:
-            reply_text = "❌ 抱歉，上傳圖片時發生錯誤，請稍後再試。"
+            reply_text = "❌ 抱歉，記錄圖片時發生錯誤，請稍後再試。"
         
         # Reply to user
         line_bot_api.reply_message(
