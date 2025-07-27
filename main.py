@@ -56,6 +56,9 @@ google_sheet_name = os.environ.get('GOOGLE_SHEET_NAME', 'Sheet1')
 # Option to disable Google Drive upload (useful when quota is exceeded)
 disable_drive_upload = os.environ.get('DISABLE_DRIVE_UPLOAD', 'false').lower() == 'true'
 
+# Option to disable speech-to-text conversion (useful when API has issues)
+disable_speech_conversion = os.environ.get('DISABLE_SPEECH_CONVERSION', 'false').lower() == 'true'
+
 if not google_sheet_id:
     logger.error("GOOGLE_SHEET_ID must be set")
     raise ValueError("Missing required Google Sheet ID")
@@ -601,32 +604,44 @@ def handle_audio(event):
             )
             return
         
-        # Convert audio to text
-        logger.info("Starting speech-to-text conversion...")
-        transcribed_text = convert_audio_to_text(audio_content)
-        
-        if transcribed_text:
-            # Write transcribed text to Google Sheet
+        # Check if speech conversion is disabled or try to convert
+        if disable_speech_conversion:
+            logger.info("Speech-to-text conversion is disabled, recording audio info only")
+            # Record audio message info without conversion
             success = write_to_google_sheet(
                 timestamp, 
                 user_id, 
                 user_name, 
-                f"🎤 語音轉文字: {transcribed_text}"
+                f"🎤 語音訊息已接收 (時長: {duration}ms, 大小: {len(audio_content)} bytes)"
             )
-            
-            if success:
-                reply_text = f"✅ 語音訊息已成功轉換並記錄！\n\n📝 轉換結果：\n「{transcribed_text}」"
-            else:
-                reply_text = f"✅ 語音轉換成功，但記錄時發生錯誤。\n\n📝 轉換結果：\n「{transcribed_text}」"
+            reply_text = "✅ 語音訊息已成功記錄！\n📝 註：語音轉文字功能目前停用，僅記錄語音資訊"
         else:
-            # Even if transcription fails, record that we received an audio message
-            success = write_to_google_sheet(
-                timestamp, 
-                user_id, 
-                user_name, 
-                f"🎤 語音訊息 (轉換失敗，時長: {duration}ms)"
-            )
-            reply_text = "❌ 抱歉，無法識別語音內容。請確保語音清晰並重新嘗試。"
+            # Try to convert audio to text
+            logger.info("Starting speech-to-text conversion...")
+            transcribed_text = convert_audio_to_text(audio_content)
+            
+            if transcribed_text:
+                # Write transcribed text to Google Sheet
+                success = write_to_google_sheet(
+                    timestamp, 
+                    user_id, 
+                    user_name, 
+                    f"🎤 語音轉文字: {transcribed_text}"
+                )
+                
+                if success:
+                    reply_text = f"✅ 語音訊息已成功轉換並記錄！\n\n📝 轉換結果：\n「{transcribed_text}」"
+                else:
+                    reply_text = f"✅ 語音轉換成功，但記錄時發生錯誤。\n\n📝 轉換結果：\n「{transcribed_text}」"
+            else:
+                # Even if transcription fails, record that we received an audio message
+                success = write_to_google_sheet(
+                    timestamp, 
+                    user_id, 
+                    user_name, 
+                    f"🎤 語音訊息 (轉換失敗，時長: {duration}ms, 大小: {len(audio_content)} bytes)"
+                )
+                reply_text = "❌ 抱歉，無法識別語音內容。請確保語音清晰並重新嘗試。"
         
         # Reply to user
         line_bot_api.reply_message(
