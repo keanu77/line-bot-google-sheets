@@ -39,6 +39,12 @@ handler = WebhookHandler(channel_secret)
 google_credentials_json = os.environ.get('GOOGLE_SHEETS_CREDENTIALS')
 google_credentials_base64 = os.environ.get('GOOGLE_SHEETS_CREDENTIALS_BASE64')
 google_credentials_file = os.environ.get('GOOGLE_SHEETS_CREDENTIALS_FILE')
+
+# Support for simple credentials (individual environment variables)
+google_project_id = os.environ.get('GOOGLE_PROJECT_ID')
+google_private_key = os.environ.get('GOOGLE_PRIVATE_KEY')
+google_client_email = os.environ.get('GOOGLE_CLIENT_EMAIL')
+
 google_sheet_id = os.environ.get('GOOGLE_SHEET_ID')
 google_sheet_name = os.environ.get('GOOGLE_SHEET_NAME', 'Sheet1')
 
@@ -46,8 +52,14 @@ if not google_sheet_id:
     logger.error("GOOGLE_SHEET_ID must be set")
     raise ValueError("Missing required Google Sheet ID")
 
-if not google_credentials_json and not google_credentials_base64 and not google_credentials_file:
-    logger.error("Either GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEETS_CREDENTIALS_BASE64, or GOOGLE_SHEETS_CREDENTIALS_FILE must be set")
+# Check if we have any form of credentials
+has_json = google_credentials_json
+has_base64 = google_credentials_base64
+has_file = google_credentials_file
+has_simple = google_project_id and google_private_key and google_client_email
+
+if not (has_json or has_base64 or has_file or has_simple):
+    logger.error("Must provide credentials via one of: GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEETS_CREDENTIALS_BASE64, GOOGLE_SHEETS_CREDENTIALS_FILE, or GOOGLE_PROJECT_ID+GOOGLE_PRIVATE_KEY+GOOGLE_CLIENT_EMAIL")
     raise ValueError("Missing required Google Sheets credentials")
 
 # Initialize Google Sheets client
@@ -62,8 +74,36 @@ def init_google_sheets():
                 scopes=['https://www.googleapis.com/auth/spreadsheets']
             )
             logger.info("Using Google credentials from file")
+        elif has_simple:
+            # Use individual environment variables (best for deployment with long credentials)
+            try:
+                # Fix newlines in private key
+                private_key = google_private_key.replace('\\n', '\n')
+                
+                # Construct credentials dictionary
+                credentials_dict = {
+                    "type": "service_account",
+                    "project_id": google_project_id,
+                    "private_key_id": os.environ.get('GOOGLE_PRIVATE_KEY_ID', ''),
+                    "private_key": private_key,
+                    "client_email": google_client_email,
+                    "client_id": os.environ.get('GOOGLE_CLIENT_ID', ''),
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{google_client_email.replace('@', '%40')}"
+                }
+                
+                credentials = Credentials.from_service_account_info(
+                    credentials_dict,
+                    scopes=['https://www.googleapis.com/auth/spreadsheets']
+                )
+                logger.info("Using Google credentials from individual environment variables")
+            except Exception as e:
+                logger.error(f"Failed to create credentials from individual variables: {e}")
+                raise
         elif google_credentials_base64:
-            # Use BASE64 encoded credentials (recommended for deployment)
+            # Use BASE64 encoded credentials (fallback method)
             try:
                 # Fix BASE64 padding if needed
                 base64_str = google_credentials_base64.strip()
