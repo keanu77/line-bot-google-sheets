@@ -87,6 +87,7 @@ def init_google_sheets():
                 google_credentials_file,
                 scopes=[
                     'https://www.googleapis.com/auth/spreadsheets',
+                    'https://www.googleapis.com/auth/drive',
                     'https://www.googleapis.com/auth/drive.file'
                 ]
             )
@@ -127,6 +128,7 @@ def init_google_sheets():
                     credentials_dict,
                     scopes=[
                         'https://www.googleapis.com/auth/spreadsheets',
+                        'https://www.googleapis.com/auth/drive',
                         'https://www.googleapis.com/auth/drive.file'
                     ]
                 )
@@ -156,6 +158,7 @@ def init_google_sheets():
                     credentials_dict,
                     scopes=[
                         'https://www.googleapis.com/auth/spreadsheets',
+                        'https://www.googleapis.com/auth/drive',
                         'https://www.googleapis.com/auth/drive.file'
                     ]
                 )
@@ -203,38 +206,46 @@ drive_service = init_google_drive()
 def upload_image_to_drive(image_content, filename, user_id):
     """Upload image to Google Drive and return shareable link"""
     try:
-        # Create file metadata
+        # Create file metadata - use a specific folder if needed
         file_metadata = {
             'name': f"{user_id}_{filename}",
-            'parents': []  # Upload to root folder, you can specify a folder ID here
+            'parents': []  # Upload to root folder
         }
         
-        # Create media upload object
+        # Check image size and log it
+        logger.info(f"Image size: {len(image_content)} bytes")
+        
+        # Create media upload object with non-resumable upload for small files
         media = MediaIoBaseUpload(
             io.BytesIO(image_content),
             mimetype='image/jpeg',
-            resumable=True
+            resumable=False  # Use non-resumable for small files
         )
         
-        # Upload file
+        # Upload file with fields to get more info
         file = drive_service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id'
+            fields='id,name,size,webViewLink'
         ).execute()
         
         file_id = file.get('id')
-        logger.info(f"Successfully uploaded image to Google Drive: {file_id}")
+        file_size = file.get('size', 'unknown')
+        logger.info(f"Successfully uploaded image to Google Drive: {file_id}, size: {file_size} bytes")
         
-        # Make file publicly readable (optional - you can adjust permissions as needed)
-        permission = {
-            'type': 'anyone',
-            'role': 'reader'
-        }
-        drive_service.permissions().create(
-            fileId=file_id,
-            body=permission
-        ).execute()
+        # Make file publicly readable
+        try:
+            permission = {
+                'type': 'anyone',
+                'role': 'reader'
+            }
+            drive_service.permissions().create(
+                fileId=file_id,
+                body=permission
+            ).execute()
+            logger.info(f"Successfully set public permissions for file: {file_id}")
+        except Exception as perm_error:
+            logger.warning(f"Failed to set public permissions: {perm_error}")
         
         # Generate shareable link
         drive_link = f"https://drive.google.com/file/d/{file_id}/view"
@@ -244,8 +255,13 @@ def upload_image_to_drive(image_content, filename, user_id):
         
     except Exception as e:
         logger.error(f"Failed to upload image to Google Drive: {e}")
-        if "403" in str(e) and "accessNotConfigured" in str(e):
-            logger.error("Google Drive API is not enabled for this project. Please enable it in Google Cloud Console.")
+        if "403" in str(e):
+            if "accessNotConfigured" in str(e):
+                logger.error("Google Drive API is not enabled for this project. Please enable it in Google Cloud Console.")
+            elif "storageQuotaExceeded" in str(e):
+                logger.error("Google Drive storage quota exceeded. Please free up space or upgrade storage.")
+            else:
+                logger.error(f"Google Drive access denied: {e}")
         return None
 
 def write_to_google_sheet(timestamp, user_id, user_name, message_text, image_link=None, max_retries=3):
