@@ -244,6 +244,8 @@ def upload_image_to_drive(image_content, filename, user_id):
         
     except Exception as e:
         logger.error(f"Failed to upload image to Google Drive: {e}")
+        if "403" in str(e) and "accessNotConfigured" in str(e):
+            logger.error("Google Drive API is not enabled for this project. Please enable it in Google Cloud Console.")
         return None
 
 def write_to_google_sheet(timestamp, user_id, user_name, message_text, image_link=None, max_retries=3):
