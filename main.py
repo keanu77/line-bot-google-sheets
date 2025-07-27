@@ -188,13 +188,9 @@ def write_to_google_sheet(timestamp, user_id, user_name, message_text, max_retri
             worksheet_names = [ws.title for ws in worksheets]
             logger.info(f"Available worksheets: {worksheet_names}")
             
-            # Try to get the specified worksheet, or use the first one
-            try:
-                sheet = spreadsheet.worksheet(google_sheet_name)
-                logger.info(f"Using worksheet: {google_sheet_name}")
-            except:
-                logger.warning(f"Worksheet '{google_sheet_name}' not found, using first worksheet: {worksheet_names[0]}")
-                sheet = worksheets[0]
+            # Always use the first worksheet to avoid naming issues
+            sheet = worksheets[0]
+            logger.info(f"Using first worksheet: {sheet.title}")
             
             # Prepare row data
             row_data = [timestamp, user_id, user_name, message_text]
