@@ -8,11 +8,12 @@ from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage, ImageMessage
+from linebot.models import MessageEvent, TextMessage, TextSendMessage, ImageMessage, AudioMessage
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+from google.cloud import speech
 from dotenv import load_dotenv
 import requests
 
@@ -91,7 +92,8 @@ def init_google_sheets():
                 scopes=[
                     'https://www.googleapis.com/auth/spreadsheets',
                     'https://www.googleapis.com/auth/drive',
-                    'https://www.googleapis.com/auth/drive.file'
+                    'https://www.googleapis.com/auth/drive.file',
+                    'https://www.googleapis.com/auth/cloud-platform'
                 ]
             )
             logger.info("Using Google credentials from file")
@@ -205,6 +207,56 @@ def init_google_drive():
         raise
 
 drive_service = init_google_drive()
+
+# Initialize Google Speech-to-Text service
+def init_speech_service():
+    try:
+        speech_client = speech.SpeechClient(credentials=google_credentials)
+        logger.info("Google Speech-to-Text service initialized successfully")
+        return speech_client
+    except Exception as e:
+        logger.error(f"Failed to initialize Google Speech-to-Text service: {e}")
+        raise
+
+speech_client = init_speech_service()
+
+def convert_audio_to_text(audio_content):
+    """Convert audio content to text using Google Speech-to-Text API"""
+    try:
+        # Configure recognition
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=16000,
+            language_code="zh-TW",  # Traditional Chinese, change to "zh-CN" for Simplified or "en-US" for English
+            alternative_language_codes=["en-US", "zh-CN"],  # Fallback languages
+            enable_automatic_punctuation=True,
+            model="latest_long"  # Use latest model for better accuracy
+        )
+        
+        # Create audio object
+        audio = speech.RecognitionAudio(content=audio_content)
+        
+        logger.info(f"Starting speech recognition for audio of size: {len(audio_content)} bytes")
+        
+        # Perform recognition
+        response = speech_client.recognize(config=config, audio=audio)
+        
+        # Extract transcribed text
+        if response.results:
+            transcript = ""
+            for result in response.results:
+                transcript += result.alternatives[0].transcript + " "
+            
+            transcript = transcript.strip()
+            logger.info(f"Speech recognition successful: {transcript[:100]}...")
+            return transcript
+        else:
+            logger.warning("No speech detected in audio")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Failed to convert audio to text: {e}")
+        return None
 
 def upload_image_to_drive(image_content, filename, user_id):
     """Upload image to Google Drive and return shareable link"""
@@ -446,6 +498,83 @@ def handle_image(event):
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(text="❌ 處理圖片時發生錯誤，請稍後再試。")
+            )
+        except Exception as reply_error:
+            logger.error(f"Error sending reply: {reply_error}")
+
+@handler.add(MessageEvent, message=AudioMessage)
+def handle_audio(event):
+    """Handle audio messages from Line Bot"""
+    try:
+        # Get message data
+        user_id = event.source.user_id
+        message_id = event.message.id
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        duration = event.message.duration  # Audio duration in milliseconds
+        
+        # Get user profile
+        try:
+            profile = line_bot_api.get_profile(user_id)
+            user_name = profile.display_name
+        except LineBotApiError as e:
+            logger.warning(f"Could not get user profile: {e}")
+            user_name = "Unknown"
+        
+        logger.info(f"Received audio from {user_name} ({user_id}): {message_id}, duration: {duration}ms")
+        
+        # Download audio content from Line
+        try:
+            message_content = line_bot_api.get_message_content(message_id)
+            audio_content = message_content.content
+            logger.info(f"Downloaded audio content, size: {len(audio_content)} bytes")
+        except Exception as e:
+            logger.error(f"Failed to download audio: {e}")
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="❌ 下載語音訊息時發生錯誤。")
+            )
+            return
+        
+        # Convert audio to text
+        logger.info("Starting speech-to-text conversion...")
+        transcribed_text = convert_audio_to_text(audio_content)
+        
+        if transcribed_text:
+            # Write transcribed text to Google Sheet
+            success = write_to_google_sheet(
+                timestamp, 
+                user_id, 
+                user_name, 
+                f"🎤 語音轉文字: {transcribed_text}"
+            )
+            
+            if success:
+                reply_text = f"✅ 語音訊息已成功轉換並記錄！\n\n📝 轉換結果：\n「{transcribed_text}」"
+            else:
+                reply_text = f"✅ 語音轉換成功，但記錄時發生錯誤。\n\n📝 轉換結果：\n「{transcribed_text}」"
+        else:
+            # Even if transcription fails, record that we received an audio message
+            success = write_to_google_sheet(
+                timestamp, 
+                user_id, 
+                user_name, 
+                f"🎤 語音訊息 (轉換失敗，時長: {duration}ms)"
+            )
+            reply_text = "❌ 抱歉，無法識別語音內容。請確保語音清晰並重新嘗試。"
+        
+        # Reply to user
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=reply_text)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error handling audio: {e}")
+        # Send error message to user
+        try:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="❌ 處理語音訊息時發生錯誤，請稍後再試。")
             )
         except Exception as reply_error:
             logger.error(f"Error sending reply: {reply_error}")
