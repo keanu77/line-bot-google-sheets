@@ -16,6 +16,7 @@ from googleapiclient.http import MediaIoBaseUpload
 from google.cloud import speech
 from dotenv import load_dotenv
 import requests
+import openai
 
 # Load environment variables
 load_dotenv()
@@ -58,6 +59,9 @@ disable_drive_upload = os.environ.get('DISABLE_DRIVE_UPLOAD', 'false').lower() =
 
 # Option to disable speech-to-text conversion (useful when API has issues)
 disable_speech_conversion = os.environ.get('DISABLE_SPEECH_CONVERSION', 'false').lower() == 'true'
+
+# OpenAI API configuration
+openai_api_key = os.environ.get('OPENAI_API_KEY')
 
 if not google_sheet_id:
     logger.error("GOOGLE_SHEET_ID must be set")
@@ -267,6 +271,53 @@ def convert_audio_to_text_with_line(message_id):
             
     except Exception as e:
         logger.error(f"Failed to get LINE transcription: {e}")
+        return None
+
+def convert_audio_to_text_with_openai(audio_content, message_id):
+    """Convert audio content to text using OpenAI Whisper API"""
+    try:
+        if not openai_api_key:
+            logger.error("OpenAI API key not provided")
+            return None
+            
+        # 設定 OpenAI client
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        # 將音頻內容寫入暫存檔案
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
+            temp_file.write(audio_content)
+            temp_file_path = temp_file.name
+        
+        logger.info(f"Converting audio to text using OpenAI Whisper, file size: {len(audio_content)} bytes")
+        
+        # 使用 Whisper API 轉換語音
+        with open(temp_file_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="zh"  # 指定中文
+            )
+        
+        # 清理暫存檔案
+        import os
+        os.unlink(temp_file_path)
+        
+        if transcript.text:
+            logger.info(f"OpenAI Whisper transcription successful: {transcript.text[:100]}...")
+            return transcript.text.strip()
+        else:
+            logger.warning("OpenAI Whisper returned empty text")
+            return None
+            
+    except Exception as e:
+        logger.error(f"OpenAI Whisper transcription failed: {e}")
+        # 清理暫存檔案（如果存在）
+        try:
+            if 'temp_file_path' in locals():
+                os.unlink(temp_file_path)
+        except:
+            pass
         return None
 
 def convert_audio_to_text_with_google(audio_content):
@@ -575,25 +626,73 @@ def handle_audio(event):
             )
             return
         
-        # 簡化策略：直接記錄語音訊息資訊，不嘗試轉換
-        logger.info("Recording audio message info without transcription conversion")
-        
-        # 計算語音時長（秒）
-        duration_seconds = duration / 1000 if duration else 0
-        audio_size_kb = len(audio_content) / 1024 if audio_content else 0
-        
-        # 記錄語音訊息基本資訊
-        success = write_to_google_sheet(
-            timestamp, 
-            user_id, 
-            user_name, 
-            f"🎤 語音訊息 (時長: {duration_seconds:.1f}秒, 大小: {audio_size_kb:.1f}KB)"
-        )
-        
-        if success:
-            reply_text = f"✅ 語音訊息已成功記錄！\n📊 時長: {duration_seconds:.1f}秒\n📁 大小: {audio_size_kb:.1f}KB\n\n💡 目前僅記錄語音基本資訊"
+        # 檢查是否停用語音轉換
+        if disable_speech_conversion:
+            logger.info("Speech-to-text conversion is disabled, recording audio info only")
+            # 計算語音時長（秒）  
+            duration_seconds = duration / 1000 if duration else 0
+            audio_size_kb = len(audio_content) / 1024 if audio_content else 0
+            
+            # 記錄語音訊息基本資訊
+            success = write_to_google_sheet(
+                timestamp, 
+                user_id, 
+                user_name, 
+                f"🎤 語音訊息 (時長: {duration_seconds:.1f}秒, 大小: {audio_size_kb:.1f}KB)"
+            )
+            
+            if success:
+                reply_text = f"✅ 語音訊息已成功記錄！\n📊 時長: {duration_seconds:.1f}秒\n📁 大小: {audio_size_kb:.1f}KB\n\n💡 語音轉文字功能已停用"
+            else:
+                reply_text = "❌ 抱歉，記錄語音訊息時發生錯誤，請稍後再試。"
         else:
-            reply_text = "❌ 抱歉，記錄語音訊息時發生錯誤，請稍後再試。"
+            # 嘗試語音轉文字 - 優先使用 OpenAI Whisper
+            logger.info("Starting speech-to-text conversion...")
+            transcribed_text = None
+            
+            # 1. 優先嘗試 OpenAI Whisper
+            if openai_api_key:
+                logger.info("Trying OpenAI Whisper...")
+                transcribed_text = convert_audio_to_text_with_openai(audio_content, message_id)
+            
+            # 2. 如果 OpenAI 失敗，嘗試 LINE API
+            if not transcribed_text:
+                logger.info("Trying LINE Speech API...")
+                transcribed_text = convert_audio_to_text_with_line(message_id)
+                if transcribed_text == "processing":
+                    transcribed_text = None  # 重置處理中狀態
+            
+            # 3. 最後嘗試 Google Speech API（如果可用）
+            if not transcribed_text:
+                logger.info("Trying Google Speech API as last resort...")
+                transcribed_text = convert_audio_to_text_with_google(audio_content)
+            
+            # 處理轉換結果
+            if transcribed_text:
+                # 轉換成功，記錄到 Google Sheet
+                success = write_to_google_sheet(
+                    timestamp, 
+                    user_id, 
+                    user_name, 
+                    f"🎤 語音轉文字: {transcribed_text}"
+                )
+                
+                if success:
+                    reply_text = f"✅ 語音訊息已成功轉換並記錄！\n\n📝 轉換結果：\n「{transcribed_text}」"
+                else:
+                    reply_text = f"✅ 語音轉換成功，但記錄時發生錯誤。\n\n📝 轉換結果：\n「{transcribed_text}」"
+            else:
+                # 轉換失敗，記錄基本資訊
+                duration_seconds = duration / 1000 if duration else 0
+                audio_size_kb = len(audio_content) / 1024 if audio_content else 0
+                
+                success = write_to_google_sheet(
+                    timestamp, 
+                    user_id, 
+                    user_name, 
+                    f"🎤 語音訊息 (轉換失敗，時長: {duration_seconds:.1f}秒, 大小: {audio_size_kb:.1f}KB)"
+                )
+                reply_text = "❌ 抱歉，無法識別語音內容。請確保語音清晰並重新嘗試。"
         
         # Reply to user
         line_bot_api.reply_message(
