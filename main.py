@@ -223,39 +223,85 @@ speech_client = init_speech_service()
 def convert_audio_to_text(audio_content):
     """Convert audio content to text using Google Speech-to-Text API"""
     try:
-        # Configure recognition
-        config = speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            sample_rate_hertz=16000,
-            language_code="zh-TW",  # Traditional Chinese, change to "zh-CN" for Simplified or "en-US" for English
-            alternative_language_codes=["en-US", "zh-CN"],  # Fallback languages
-            enable_automatic_punctuation=True,
-            model="latest_long"  # Use latest model for better accuracy
-        )
+        # Line audio is usually in AAC format, but we need to handle different formats
+        # Try different configurations for Line audio
+        configs_to_try = [
+            # Try with WEBM_OPUS first (common for Line)
+            speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
+                language_code="zh-TW",
+                alternative_language_codes=["en-US", "zh-CN"],
+                enable_automatic_punctuation=True,
+                model="latest_short"
+            ),
+            # Try with OGG_OPUS
+            speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
+                language_code="zh-TW",
+                alternative_language_codes=["en-US", "zh-CN"],
+                enable_automatic_punctuation=True,
+                model="latest_short"
+            ),
+            # Try with LINEAR16 and various sample rates
+            speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=8000,
+                language_code="zh-TW",
+                alternative_language_codes=["en-US", "zh-CN"],
+                enable_automatic_punctuation=True,
+                model="latest_short"
+            ),
+            # Try with MP3
+            speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.MP3,
+                language_code="zh-TW",
+                alternative_language_codes=["en-US", "zh-CN"],
+                enable_automatic_punctuation=True,
+                model="latest_short"
+            )
+        ]
         
         # Create audio object
         audio = speech.RecognitionAudio(content=audio_content)
-        
         logger.info(f"Starting speech recognition for audio of size: {len(audio_content)} bytes")
         
-        # Perform recognition
-        response = speech_client.recognize(config=config, audio=audio)
+        # Try different configurations
+        for i, config in enumerate(configs_to_try):
+            try:
+                logger.info(f"Trying recognition config {i+1}/{len(configs_to_try)}: {config.encoding.name}")
+                
+                # Create a new client instance with explicit credentials for each attempt
+                client = speech.SpeechClient(credentials=google_credentials)
+                response = client.recognize(config=config, audio=audio)
+                
+                # Extract transcribed text
+                if response.results:
+                    transcript = ""
+                    for result in response.results:
+                        transcript += result.alternatives[0].transcript + " "
+                    
+                    transcript = transcript.strip()
+                    logger.info(f"Speech recognition successful with config {i+1}: {transcript[:100]}...")
+                    return transcript
+                else:
+                    logger.info(f"No speech detected with config {i+1}")
+                    continue
+                    
+            except Exception as config_error:
+                logger.warning(f"Config {i+1} failed: {config_error}")
+                if i == len(configs_to_try) - 1:  # Last attempt
+                    raise config_error
+                continue
         
-        # Extract transcribed text
-        if response.results:
-            transcript = ""
-            for result in response.results:
-                transcript += result.alternatives[0].transcript + " "
-            
-            transcript = transcript.strip()
-            logger.info(f"Speech recognition successful: {transcript[:100]}...")
-            return transcript
-        else:
-            logger.warning("No speech detected in audio")
-            return None
+        logger.warning("All recognition configs failed, no speech detected")
+        return None
             
     except Exception as e:
         logger.error(f"Failed to convert audio to text: {e}")
+        if "401" in str(e):
+            logger.error("Authentication failed. Check if Speech-to-Text API is enabled and credentials are correct.")
+        elif "403" in str(e):
+            logger.error("Permission denied. Check API permissions and quotas.")
         return None
 
 def upload_image_to_drive(image_content, filename, user_id):
