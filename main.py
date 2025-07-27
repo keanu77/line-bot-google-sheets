@@ -223,108 +223,79 @@ def init_speech_service():
 
 speech_client = init_speech_service()
 
-def convert_audio_to_text(audio_content):
-    """Convert audio content to text using Google Speech-to-Text API"""
+def convert_audio_to_text_with_line(message_id):
+    """Convert audio content to text using LINE Speech-to-text API"""
     try:
-        # Line audio is typically in AAC format, let's try the most common configurations
-        configs_to_try = [
-            # Try with ENCODING_UNSPECIFIED first (let Google auto-detect)
-            speech.RecognitionConfig(
-                language_code="zh-TW",
-                alternative_language_codes=["en-US", "zh-CN"],
-                enable_automatic_punctuation=True,
-                model="latest_short"
-            ),
-            # Try with MP3 (common format)
-            speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.MP3,
-                language_code="zh-TW",
-                alternative_language_codes=["en-US", "zh-CN"],
-                enable_automatic_punctuation=True,
-                model="latest_short"
-            ),
-            # Try with FLAC
-            speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.FLAC,
-                language_code="zh-TW",
-                alternative_language_codes=["en-US", "zh-CN"],
-                enable_automatic_punctuation=True,
-                model="latest_short"
-            ),
-            # Try with LINEAR16 at different sample rates  
-            speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-                sample_rate_hertz=16000,
-                language_code="zh-TW",
-                alternative_language_codes=["en-US", "zh-CN"],
-                enable_automatic_punctuation=True,
-                model="latest_short"
-            ),
-            # Try MULAW (telephony format)
-            speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.MULAW,
-                sample_rate_hertz=8000,
-                language_code="zh-TW",
-                alternative_language_codes=["en-US", "zh-CN"],
-                enable_automatic_punctuation=True,
-                model="latest_short"
-            )
-        ]
+        import requests
         
-        # Create audio object
-        audio = speech.RecognitionAudio(content=audio_content)
-        logger.info(f"Starting speech recognition for audio of size: {len(audio_content)} bytes")
+        # LINE Speech-to-text API endpoint
+        url = f"https://api.line.me/v2/bot/message/{message_id}/content/transcription"
         
-        # Try different configurations
-        for i, config in enumerate(configs_to_try):
-            try:
-                config_name = config.encoding.name if config.encoding else "UNSPECIFIED"
-                logger.info(f"Trying recognition config {i+1}/{len(configs_to_try)}: {config_name}")
-                
-                # Create a new client instance with explicit credentials for each attempt
-                client = speech.SpeechClient(credentials=google_credentials)
-                response = client.recognize(config=config, audio=audio)
-                
-                # Extract transcribed text
-                if response.results:
-                    transcript = ""
-                    confidence_scores = []
-                    for result in response.results:
-                        transcript += result.alternatives[0].transcript + " "
-                        confidence_scores.append(result.alternatives[0].confidence)
-                    
-                    transcript = transcript.strip()
-                    avg_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0
-                    logger.info(f"Speech recognition successful with config {i+1}: confidence={avg_confidence:.2f}")
-                    logger.info(f"Transcript: {transcript[:200]}...")
-                    return transcript
-                else:
-                    logger.info(f"No speech detected with config {i+1}")
-                    continue
-                    
-            except Exception as config_error:
-                error_msg = str(config_error)
-                logger.warning(f"Config {i+1} ({config_name}) failed: {error_msg}")
-                
-                # Don't continue if it's an authentication error
-                if "401" in error_msg or "403" in error_msg:
-                    raise config_error
-                    
-                if i == len(configs_to_try) - 1:  # Last attempt
-                    logger.error("All configurations failed")
-                continue
+        headers = {
+            'Authorization': f'Bearer {channel_access_token}',
+            'Content-Type': 'application/json'
+        }
         
-        logger.warning("All recognition configs failed, no speech detected")
-        return None
+        logger.info(f"Requesting transcription for message ID: {message_id}")
+        
+        # Request transcription from LINE
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            transcription_data = response.json()
+            
+            # Check if transcription is available
+            if 'text' in transcription_data and transcription_data['text']:
+                transcript = transcription_data['text']
+                logger.info(f"LINE speech transcription successful: {transcript[:100]}...")
+                return transcript
+            else:
+                logger.warning("LINE transcription returned empty text")
+                return None
+                
+        elif response.status_code == 202:
+            logger.info("LINE transcription is being processed, try again later")
+            return "processing"
+            
+        elif response.status_code == 404:
+            logger.warning("LINE transcription not available for this message")
+            return None
+            
+        else:
+            logger.error(f"LINE transcription API error: {response.status_code} - {response.text}")
+            return None
             
     except Exception as e:
-        logger.error(f"Failed to convert audio to text: {e}")
-        if "401" in str(e):
-            logger.error("Authentication failed. Check if Speech-to-Text API is enabled and credentials are correct.")
-        elif "403" in str(e):
-            logger.error("Permission denied. Check API permissions and quotas.")
-        elif "400" in str(e):
-            logger.error("Bad request. Audio format might not be supported.")
+        logger.error(f"Failed to get LINE transcription: {e}")
+        return None
+
+def convert_audio_to_text_with_google(audio_content):
+    """Fallback: Convert audio content to text using Google Speech-to-Text API"""
+    try:
+        # Simplified Google Speech approach
+        config = speech.RecognitionConfig(
+            language_code="zh-TW",
+            alternative_language_codes=["en-US", "zh-CN"],
+            enable_automatic_punctuation=True,
+            model="latest_short"
+        )
+        
+        audio = speech.RecognitionAudio(content=audio_content)
+        logger.info("Trying Google Speech-to-Text as fallback...")
+        
+        client = speech.SpeechClient(credentials=google_credentials)
+        response = client.recognize(config=config, audio=audio)
+        
+        if response.results:
+            transcript = ""
+            for result in response.results:
+                transcript += result.alternatives[0].transcript + " "
+            return transcript.strip()
+        else:
+            return None
+            
+    except Exception as e:
+        logger.error(f"Google Speech-to-Text fallback failed: {e}")
         return None
 
 def upload_image_to_drive(image_content, filename, user_id):
@@ -616,11 +587,20 @@ def handle_audio(event):
             )
             reply_text = "✅ 語音訊息已成功記錄！\n📝 註：語音轉文字功能目前停用，僅記錄語音資訊"
         else:
-            # Try to convert audio to text
-            logger.info("Starting speech-to-text conversion...")
-            transcribed_text = convert_audio_to_text(audio_content)
+            # Try to convert audio to text using LINE API first
+            logger.info("Starting speech-to-text conversion with LINE API...")
+            transcribed_text = convert_audio_to_text_with_line(message_id)
             
-            if transcribed_text:
+            # If LINE API fails or returns processing, try Google as fallback
+            if not transcribed_text or transcribed_text == "processing":
+                if transcribed_text == "processing":
+                    logger.info("LINE transcription is processing, trying Google Speech as fallback...")
+                else:
+                    logger.info("LINE transcription failed, trying Google Speech as fallback...")
+                
+                transcribed_text = convert_audio_to_text_with_google(audio_content)
+            
+            if transcribed_text and transcribed_text != "processing":
                 # Write transcribed text to Google Sheet
                 success = write_to_google_sheet(
                     timestamp, 
@@ -633,8 +613,17 @@ def handle_audio(event):
                     reply_text = f"✅ 語音訊息已成功轉換並記錄！\n\n📝 轉換結果：\n「{transcribed_text}」"
                 else:
                     reply_text = f"✅ 語音轉換成功，但記錄時發生錯誤。\n\n📝 轉換結果：\n「{transcribed_text}」"
+            elif transcribed_text == "processing":
+                # LINE is still processing, record and ask user to wait
+                success = write_to_google_sheet(
+                    timestamp, 
+                    user_id, 
+                    user_name, 
+                    f"🎤 語音訊息 (轉換處理中，時長: {duration}ms)"
+                )
+                reply_text = "⏳ 語音正在轉換中，請稍後再傳送一次語音以獲取轉換結果。"
             else:
-                # Even if transcription fails, record that we received an audio message
+                # All transcription methods failed, record that we received an audio message
                 success = write_to_google_sheet(
                     timestamp, 
                     user_id, 
