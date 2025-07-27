@@ -270,10 +270,12 @@ def handle_message(event):
 def default_handler(event):
     """Handle non-text messages"""
     try:
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="📝 目前僅支援文字訊息記錄，請傳送文字訊息。")
-        )
+        # Check if event has reply_token (some events don't)
+        if hasattr(event, 'reply_token'):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="📝 目前僅支援文字訊息記錄，請傳送文字訊息。")
+            )
     except Exception as e:
         logger.error(f"Error handling non-text message: {e}")
 
