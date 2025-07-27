@@ -223,37 +223,44 @@ speech_client = init_speech_service()
 def convert_audio_to_text(audio_content):
     """Convert audio content to text using Google Speech-to-Text API"""
     try:
-        # Line audio is usually in AAC format, but we need to handle different formats
-        # Try different configurations for Line audio
+        # Line audio is typically in AAC format, let's try the most common configurations
         configs_to_try = [
-            # Try with WEBM_OPUS first (common for Line)
+            # Try with ENCODING_UNSPECIFIED first (let Google auto-detect)
             speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
                 language_code="zh-TW",
                 alternative_language_codes=["en-US", "zh-CN"],
                 enable_automatic_punctuation=True,
                 model="latest_short"
             ),
-            # Try with OGG_OPUS
-            speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.OGG_OPUS,
-                language_code="zh-TW",
-                alternative_language_codes=["en-US", "zh-CN"],
-                enable_automatic_punctuation=True,
-                model="latest_short"
-            ),
-            # Try with LINEAR16 and various sample rates
-            speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-                sample_rate_hertz=8000,
-                language_code="zh-TW",
-                alternative_language_codes=["en-US", "zh-CN"],
-                enable_automatic_punctuation=True,
-                model="latest_short"
-            ),
-            # Try with MP3
+            # Try with MP3 (common format)
             speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.MP3,
+                language_code="zh-TW",
+                alternative_language_codes=["en-US", "zh-CN"],
+                enable_automatic_punctuation=True,
+                model="latest_short"
+            ),
+            # Try with FLAC
+            speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.FLAC,
+                language_code="zh-TW",
+                alternative_language_codes=["en-US", "zh-CN"],
+                enable_automatic_punctuation=True,
+                model="latest_short"
+            ),
+            # Try with LINEAR16 at different sample rates  
+            speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=16000,
+                language_code="zh-TW",
+                alternative_language_codes=["en-US", "zh-CN"],
+                enable_automatic_punctuation=True,
+                model="latest_short"
+            ),
+            # Try MULAW (telephony format)
+            speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.MULAW,
+                sample_rate_hertz=8000,
                 language_code="zh-TW",
                 alternative_language_codes=["en-US", "zh-CN"],
                 enable_automatic_punctuation=True,
@@ -268,7 +275,8 @@ def convert_audio_to_text(audio_content):
         # Try different configurations
         for i, config in enumerate(configs_to_try):
             try:
-                logger.info(f"Trying recognition config {i+1}/{len(configs_to_try)}: {config.encoding.name}")
+                config_name = config.encoding.name if config.encoding else "UNSPECIFIED"
+                logger.info(f"Trying recognition config {i+1}/{len(configs_to_try)}: {config_name}")
                 
                 # Create a new client instance with explicit credentials for each attempt
                 client = speech.SpeechClient(credentials=google_credentials)
@@ -277,20 +285,30 @@ def convert_audio_to_text(audio_content):
                 # Extract transcribed text
                 if response.results:
                     transcript = ""
+                    confidence_scores = []
                     for result in response.results:
                         transcript += result.alternatives[0].transcript + " "
+                        confidence_scores.append(result.alternatives[0].confidence)
                     
                     transcript = transcript.strip()
-                    logger.info(f"Speech recognition successful with config {i+1}: {transcript[:100]}...")
+                    avg_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0
+                    logger.info(f"Speech recognition successful with config {i+1}: confidence={avg_confidence:.2f}")
+                    logger.info(f"Transcript: {transcript[:200]}...")
                     return transcript
                 else:
                     logger.info(f"No speech detected with config {i+1}")
                     continue
                     
             except Exception as config_error:
-                logger.warning(f"Config {i+1} failed: {config_error}")
-                if i == len(configs_to_try) - 1:  # Last attempt
+                error_msg = str(config_error)
+                logger.warning(f"Config {i+1} ({config_name}) failed: {error_msg}")
+                
+                # Don't continue if it's an authentication error
+                if "401" in error_msg or "403" in error_msg:
                     raise config_error
+                    
+                if i == len(configs_to_try) - 1:  # Last attempt
+                    logger.error("All configurations failed")
                 continue
         
         logger.warning("All recognition configs failed, no speech detected")
@@ -302,6 +320,8 @@ def convert_audio_to_text(audio_content):
             logger.error("Authentication failed. Check if Speech-to-Text API is enabled and credentials are correct.")
         elif "403" in str(e):
             logger.error("Permission denied. Check API permissions and quotas.")
+        elif "400" in str(e):
+            logger.error("Bad request. Audio format might not be supported.")
         return None
 
 def upload_image_to_drive(image_content, filename, user_id):
